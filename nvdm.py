@@ -59,20 +59,20 @@ class NVDM(object):
         with tf.variable_scope('decoder'):
           if self.n_sample ==1:  # single sample
             eps = tf.random_normal((batch_size, self.n_topic), 0, 1)
-            doc_vec = tf.mul(tf.exp(self.logsigm), eps) + self.mean
+            doc_vec = tf.multiply(tf.exp(self.logsigm), eps) + self.mean
             logits = tf.nn.log_softmax(utils.linear(doc_vec, self.vocab_size, scope='projection'))
-            self.recons_loss = -tf.reduce_sum(tf.mul(logits, self.x), 1)
+            self.recons_loss = -tf.reduce_sum(tf.multiply(logits, self.x), 1)
           # multiple samples
           else:
             eps = tf.random_normal((self.n_sample*batch_size, self.n_topic), 0, 1)
             eps_list = tf.split(0, self.n_sample, eps)
             recons_loss_list = []
-            for i in xrange(self.n_sample):
+            for i in range(self.n_sample):
               if i > 0: tf.get_variable_scope().reuse_variables()
               curr_eps = eps_list[i]
-              doc_vec = tf.mul(tf.exp(self.logsigm), curr_eps) + self.mean
+              doc_vec = tf.multiply(tf.exp(self.logsigm), curr_eps) + self.mean
               logits = tf.nn.log_softmax(utils.linear(doc_vec, self.vocab_size, scope='projection'))
-              recons_loss_list.append(-tf.reduce_sum(tf.mul(logits, self.x), 1))
+              recons_loss_list.append(-tf.reduce_sum(tf.multiply(logits, self.x), 1))
             self.recons_loss = tf.add_n(recons_loss_list) / self.n_sample
 
         self.objective = self.recons_loss + self.kld
@@ -89,14 +89,73 @@ class NVDM(object):
         self.optim_enc = optimizer.apply_gradients(zip(enc_grads, enc_vars))
         self.optim_dec = optimizer.apply_gradients(zip(dec_grads, dec_vars))
 
+def evaluate(model, dataset, dataset_count, data_batches, session, step, epoch=None, summaries=None, writer=None):
+
+  loss_sum = 0.0
+  kld_sum = 0.0
+  ppx_sum = 0.0
+  word_count = 0
+  doc_count = 0
+
+  for idx_batch in data_batches:
+
+    data_batch, count_batch, mask = utils.fetch_data(dataset, 
+                                                     dataset_count, 
+                                                     idx_batch, 
+                                                     FLAGS.vocab_size)
+    input_feed = {model.x.name: data_batch, model.mask.name: mask}
+    loss, kld = session.run([model.objective, model.kld], input_feed)
+    
+    loss_sum += np.sum(loss)
+    kld_sum += np.sum(kld) / np.sum(mask)  
+    word_count += np.sum(count_batch)
+    count_batch = np.add(count_batch, 1e-12)
+    ppx_sum += np.sum(np.divide(loss, count_batch))
+    doc_count += np.sum(mask) 
+
+  print_ppx = np.exp(loss_sum / word_count)
+  print_ppx_perdoc = np.exp(ppx_sum / doc_count)
+  print_kld = kld_sum/len(data_batches)
+  
+  if step == 'val':
+ 
+    weight_summaries = session.run(summaries)
+    writer.add_summary(weight_summaries, epoch)
+
+    saver = tf.train.Saver()
+    save_path = saver.save(session, "./results/model.ckpt")
+    print("Model saved in path: %s" % save_path)
+    print('| Epoch dev: {:d} |'.format(epoch+1)) 
+
+  print('| Perplexity: {:.9f}'.format(print_ppx),
+        '| Per doc ppx: {:.5f}'.format(print_ppx_perdoc),
+        '| KLD: {:.5}'.format(print_kld))
+
+  with open('./results/report.csv', 'a') as handle:
+    handle.write(str(print_ppx_perdoc))
+
+def get_summaries(sess):
+
+  weights = tf.trainable_variables()
+  values = sess.run(weights)
+
+  weight_summaries = []
+  for weight, value in zip(weights, values):
+    weight_summaries.append(tf.summary.histogram(weight.name, value))
+
+  return tf.summary.merge(weight_summaries) 
+
 def train(sess, model, 
           train_url, 
           test_url, 
           batch_size, 
           training_epochs=1000, 
           alternate_epochs=10):
+
   """train nvdm model."""
   train_set, train_count = utils.data_set(train_url)
+  #FIXME
+  train_set, train_count = train_set[:100], train_count[:100]
   test_set, test_count = utils.data_set(test_url)
   # hold-out development dataset
   dev_set = test_set[:50]
@@ -105,18 +164,23 @@ def train(sess, model,
   dev_batches = utils.create_batches(len(dev_set), batch_size, shuffle=False)
   test_batches = utils.create_batches(len(test_set), batch_size, shuffle=False)
   
+  summaries = get_summaries(sess) 
+  writer = tf.summary.FileWriter('./results/logs/', sess.graph)
+  
   for epoch in range(training_epochs):
+
     train_batches = utils.create_batches(len(train_set), batch_size, shuffle=True)
-    #-------------------------------
-    # train
-    for switch in xrange(0, 2):
+
+    for switch in range(0, 2):
+
       if switch == 0:
         optim = model.optim_dec
         print_mode = 'updating decoder'
       else:
         optim = model.optim_enc
         print_mode = 'updating encoder'
-      for i in xrange(alternate_epochs):
+
+      for i in range(alternate_epochs):
         loss_sum = 0.0
         ppx_sum = 0.0
         kld_sum = 0.0
@@ -145,59 +209,9 @@ def train(sess, model,
                '| Corpus ppx: {:.5f}'.format(print_ppx),  # perplexity for all docs
                '| Per doc ppx: {:.5f}'.format(print_ppx_perdoc),  # perplexity for per doc
                '| KLD: {:.5}'.format(print_kld))
-    #-------------------------------
-    # dev
-    loss_sum = 0.0
-    kld_sum = 0.0
-    ppx_sum = 0.0
-    word_count = 0
-    doc_count = 0
-    for idx_batch in dev_batches:
-      data_batch, count_batch, mask = utils.fetch_data(
-          dev_set, dev_count, idx_batch, FLAGS.vocab_size)
-      input_feed = {model.x.name: data_batch, model.mask.name: mask}
-      loss, kld = sess.run([model.objective, model.kld],
-                           input_feed)
-      loss_sum += np.sum(loss)
-      kld_sum += np.sum(kld) / np.sum(mask)  
-      word_count += np.sum(count_batch)
-      count_batch = np.add(count_batch, 1e-12)
-      ppx_sum += np.sum(np.divide(loss, count_batch))
-      doc_count += np.sum(mask) 
-    print_ppx = np.exp(loss_sum / word_count)
-    print_ppx_perdoc = np.exp(ppx_sum / doc_count)
-    print_kld = kld_sum/len(dev_batches)
-    print('| Epoch dev: {:d} |'.format(epoch+1), 
-           '| Perplexity: {:.9f}'.format(print_ppx),
-           '| Per doc ppx: {:.5f}'.format(print_ppx_perdoc),
-           '| KLD: {:.5}'.format(print_kld))        
-    #-------------------------------
-    # test
-    if FLAGS.test:
-      loss_sum = 0.0
-      kld_sum = 0.0
-      ppx_sum = 0.0
-      word_count = 0
-      doc_count = 0
-      for idx_batch in test_batches:
-        data_batch, count_batch, mask = utils.fetch_data(
-          test_set, test_count, idx_batch, FLAGS.vocab_size)
-        input_feed = {model.x.name: data_batch, model.mask.name: mask}
-        loss, kld = sess.run([model.objective, model.kld],
-                             input_feed)
-        loss_sum += np.sum(loss)
-        kld_sum += np.sum(kld)/np.sum(mask) 
-        word_count += np.sum(count_batch)
-        count_batch = np.add(count_batch, 1e-12)
-        ppx_sum += np.sum(np.divide(loss, count_batch))
-        doc_count += np.sum(mask) 
-      print_ppx = np.exp(loss_sum / word_count)
-      print_ppx_perdoc = np.exp(ppx_sum / doc_count)
-      print_kld = kld_sum/len(test_batches)
-      print('| Epoch test: {:d} |'.format(epoch+1), 
-             '| Perplexity: {:.9f}'.format(print_ppx),
-             '| Per doc ppx: {:.5f}'.format(print_ppx_perdoc),
-             '| KLD: {:.5}'.format(print_kld))   
+    
+    #Validation
+    evaluate(model, dev_set, dev_count, dev_batches, sess, 'val', epoch, summaries, writer)
 
 def main(argv=None):
     if FLAGS.non_linearity == 'tanh':
@@ -214,14 +228,26 @@ def main(argv=None):
                 learning_rate=FLAGS.learning_rate, 
                 batch_size=FLAGS.batch_size,
                 non_linearity=non_linearity)
+
     sess = tf.Session()
     init = tf.initialize_all_variables()
+
     sess.run(init)
 
     train_url = os.path.join(FLAGS.data_dir, 'train.feat')
     test_url = os.path.join(FLAGS.data_dir, 'test.feat')
+    
+    if not FLAGS.test:
+      train(sess, nvdm, train_url, test_url, FLAGS.batch_size)
+    
+    else:
+      #Test
+      test_set, test_count = utils.data_set(test_url)
+      test_batches = utils.create_batches(len(test_set), FLAGS.batch_size, shuffle=False)
+      saver.restore(sess, "./results/model.ckpt")
+      print("Model restored.")
 
-    train(sess, nvdm, train_url, test_url, FLAGS.batch_size)
+      evaluate(model, test_set, test_count, test_batches, sess, 'test') 
 
 if __name__ == '__main__':
     tf.app.run()

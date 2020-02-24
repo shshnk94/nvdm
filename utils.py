@@ -28,10 +28,10 @@ def data_set(data_url):
 def create_batches(data_size, batch_size, shuffle=True):
   """create index by batches."""
   batches = []
-  ids = range(data_size)
+  ids = list(range(data_size))
   if shuffle:
     random.shuffle(ids)
-  for i in xrange(data_size / batch_size):
+  for i in range(data_size // batch_size):
     start = i * batch_size
     end = (i + 1) * batch_size
     batches.append(ids[start:end])
@@ -103,6 +103,6 @@ def mlp(inputs,
   with tf.variable_scope(scope or 'Linear'):
     mlp_layer = len(mlp_hidden)
     res = inputs
-    for l in xrange(mlp_layer):
+    for l in range(mlp_layer):
       res = mlp_nonlinearity(linear(res, mlp_hidden[l], scope='l'+str(l)))
     return res
