@@ -1,4 +1,4 @@
-"""NVDM Tensorflow implementation by Yishu Miao"""
+"NVDM Tensorflow implementation by Yishu Miao"""
 from __future__ import print_function
 
 import numpy as np
@@ -89,7 +89,85 @@ class NVDM(object):
         self.optim_enc = optimizer.apply_gradients(zip(enc_grads, enc_vars))
         self.optim_dec = optimizer.apply_gradients(zip(dec_grads, dec_vars))
 
-def evaluate(model, dataset, dataset_count, data_batches, session, step, epoch=None, summaries=None, writer=None):
+def get_topic_diversity(probabilities, topk):
+
+    num_topics = probabilities.shape[0]
+    list_w = np.zeros((num_topics, topk))
+
+    for k in range(num_topics):
+        idx = probabilities[k,:].argsort()[-topk:]
+        list_w[k,:] = idx
+    n_unique = len(np.unique(list_w))
+    diversity = n_unique / (topk * num_topics)
+
+    return diversity
+
+def get_document_frequency(data, wi, wj=None):
+
+  if wj is None:
+    D_wi = 0
+    for l in range(len(data)):
+      doc = data[l].keys()
+      if len(doc) == 1: 
+        continue
+      else:
+        if wi in doc:
+          D_wi += 1
+    
+    return D_wi
+
+  D_wj = 0
+  D_wi_wj = 0
+
+  for l in range(len(data)):
+    doc = data[l].keys()
+    if wj in doc:
+      D_wj += 1
+    if wi in doc:
+      D_wi_wj += 1
+
+  return D_wj, D_wi_wj 
+
+def get_topic_coherence(probabilities, tokens):
+
+  #top_10_words = probabilities.argsort(axis=1)[::-1][:, :10]
+  D = len(tokens)
+
+  coherence = []
+  num_topics = probabilities.shape[0]
+
+  for k in range(num_topics):
+
+    top_words = list(probabilities[k].argsort()[-11:][::-1])
+    
+    coherence_k = 0
+    counter = 0
+
+    for i, word in enumerate(top_words):
+      D_wi = get_document_frequency(tokens, word)
+      j = i + 1
+      tmp = 0
+
+      while j < len(top_words) and j > i:
+        D_wj, D_wi_wj = get_document_frequency(tokens, word, top_words[j])
+        if not D_wi or not D_wj or not D_wi_wj:
+          print(word, top_words[j], D_wi, D_wj, D_wi_wj)
+        if not D_wi_wj:
+          f_wi_wj = -1
+        else:
+          f_wi_wj = -1 + (np.log(D_wi) + np.log(D_wj)  - 2.0 * np.log(D)) / (np.log(D_wi_wj) - np.log(D))
+
+        tmp += f_wi_wj
+        j += 1
+        counter += 1
+            
+      coherence_k += tmp 
+
+    coherence.append(coherence_k)
+    
+  return np.mean(coherence) / counter
+
+def evaluate(model, training_data, dataset, dataset_count, data_batches, session, step, epoch=None, summaries=None, writer=None):
 
   loss_sum = 0.0
   kld_sum = 0.0
@@ -117,6 +195,10 @@ def evaluate(model, dataset, dataset_count, data_batches, session, step, epoch=N
   print_ppx_perdoc = np.exp(ppx_sum / doc_count)
   print_kld = kld_sum/len(data_batches)
   
+  probabilities = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope='decoder/projection/Matrix:0')[0]
+  coherence = get_topic_coherence(probabilities.eval(session), training_data)
+  diversity = get_topic_diversity(probabilities.eval(session), 25)
+    
   if step == 'val':
  
     weight_summaries = session.run(summaries)
@@ -132,7 +214,7 @@ def evaluate(model, dataset, dataset_count, data_batches, session, step, epoch=N
         '| KLD: {:.5}'.format(print_kld))
 
   with open('./results/report.csv', 'a') as handle:
-    handle.write(str(print_ppx_perdoc))
+    handle.write(str(print_ppx_perdoc) + ',' + str(coherence) + ',' + str(diversity) + '\n')
 
 def get_summaries(sess):
 
@@ -154,8 +236,6 @@ def train(sess, model,
 
   """train nvdm model."""
   train_set, train_count = utils.data_set(train_url)
-  #FIXME
-  train_set, train_count = train_set[:100], train_count[:100]
   test_set, test_count = utils.data_set(test_url)
   # hold-out development dataset
   dev_set = test_set[:50]
@@ -211,7 +291,7 @@ def train(sess, model,
                '| KLD: {:.5}'.format(print_kld))
     
     #Validation
-    evaluate(model, dev_set, dev_count, dev_batches, sess, 'val', epoch, summaries, writer)
+    evaluate(model, train_set, dev_set, dev_count, dev_batches, sess, 'val', epoch, summaries, writer)
 
 def main(argv=None):
     if FLAGS.non_linearity == 'tanh':
@@ -246,8 +326,10 @@ def main(argv=None):
       test_batches = utils.create_batches(len(test_set), FLAGS.batch_size, shuffle=False)
       saver.restore(sess, "./results/model.ckpt")
       print("Model restored.")
-
-      evaluate(model, test_set, test_count, test_batches, sess, 'test') 
+      
+      #Training data
+      train_set, train_count = utils.data_set(train_url)
+      evaluate(model, train_set, test_set, test_count, test_batches, sess, 'test') 
 
 if __name__ == '__main__':
     tf.app.run()
