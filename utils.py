@@ -17,7 +17,8 @@ def data_set(data_url):
     for id_freq in id_freqs[1:]:
       items = id_freq.split(':')
       # python starts from 0
-      doc[int(items[0])-1] = int(items[1])
+      #doc[int(items[0])-1] = int(items[1])
+      doc[int(items[0])] = int(items[1])
       count += int(items[1])
     if count > 0:
       data.append(doc)
