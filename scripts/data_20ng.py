@@ -38,6 +38,10 @@ def contains_numeric(w):
     
 init_docs = init_docs_tr + init_docs_ts
 
+# Remove documents with length less than 10 and greater than 95th percentile.
+lengths = np.array([len(doc) for doc in init_docs])
+init_docs = [init_docs[i] for i in np.where((lengths > 10) & (lengths < np.percentile(lengths, 95)))[0]]
+
 # Removes all words with any punctuation or digits in them.
 init_docs = [[w.lower() for w in init_docs[doc] if not contains_punctuation(w)] for doc in range(len(init_docs))]
 init_docs = [[w for w in init_docs[doc] if not contains_numeric(w)] for doc in range(len(init_docs))]
@@ -79,7 +83,6 @@ print('vocabulary after removing words not in train: {}'.format(len(vocab)))
 docs_tr = [[word2id[w] for w in init_docs[idx_permute[idx_d]].split() if w in word2id] for idx_d in range(trSize)]
 docs_va = [[word2id[w] for w in init_docs[idx_permute[idx_d+trSize]].split() if w in word2id] for idx_d in range(vaSize)]
 docs_ts = [[word2id[w] for w in init_docs[idx_d+num_docs_tr].split() if w in word2id] for idx_d in range(tsSize)]
-
 print('number of documents (train): {} [this should be equal to {}]'.format(len(docs_tr), trSize))
 print('number of documents (test): {} [this should be equal to {}]'.format(len(docs_ts), tsSize))
 print('number of documents (valid): {} [this should be equal to {}]'.format(len(docs_va), vaSize))
