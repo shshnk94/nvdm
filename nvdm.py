@@ -3,6 +3,7 @@ from __future__ import print_function
 
 import numpy as np
 import tensorflow as tf
+import pickle as pkl
 import math
 import os
 import sys
@@ -25,6 +26,7 @@ flags.DEFINE_integer('batch_size', 64, 'Batch size.')
 flags.DEFINE_integer('n_hidden', 500, 'Size of each hidden layer.')
 flags.DEFINE_integer('n_topic', 50, 'Size of stochastic vector.')
 flags.DEFINE_integer('n_sample', 1, 'Number of samples.')
+flags.DEFINE_integer('n_words', 10, 'Number of words to be displayed per topic.')
 flags.DEFINE_integer('vocab_size', 2000, 'Vocabulary size.')
 flags.DEFINE_boolean('test', False, 'Process test data.')
 flags.DEFINE_string('non_linearity', 'tanh', 'Non-linearity of the MLP.')
@@ -97,89 +99,18 @@ class NVDM(object):
 
         self.optim_enc = optimizer.apply_gradients(zip(enc_grads, enc_vars))
         self.optim_dec = optimizer.apply_gradients(zip(dec_grads, dec_vars))
-"""
-def get_topic_diversity(beta):
 
-    beta = softmax(beta, axis=1)
-    logits = pairwise_distances(beta, metric='cosine')
-    TD = logits[np.triu_indices(logits.shape[0], k = 1)].mean()
-    print('Topic diveristy is: {}'.format(TD))
-
-    return TD
-def get_document_frequency(data, wi, wj=None):
-
-    if wj is None:
-
-        D_wi = 0
-
-        for l in range(len(data)):
-            doc = data[l].keys()
-            if len(doc) == 1: 
-                continue
-            if wi in doc:
-                D_wi += 1
-        return D_wi
-
-    D_wj = 0
-    D_wi_wj = 0
-
-    for l in range(len(data)):
-        doc = data[l].keys()
-        if wj in doc:
-            D_wj += 1
-            if wi in doc:
-                D_wi_wj += 1
-
-    return D_wj, D_wi_wj 
-
-def get_topic_coherence(probabilities, tokens):
-
-  probabilities = softmax(probabilities, axis=1)
-  #top_10_words = probabilities.argsort(axis=1)[::-1][:, :10]
-  D = len(tokens)
-
-  coherence = []
-  num_topics = probabilities.shape[0]
-
-  for k in range(num_topics):
-
-    top_words = list(probabilities[k].argsort()[-11:][::-1])
-    
-    coherence_k = 0
-    counter = 0
-
-    for i, word in enumerate(top_words):
-      D_wi = get_document_frequency(tokens, word)
-      j = i + 1
-      tmp = 0
-
-      while j < len(top_words) and j > i:
-        D_wj, D_wi_wj = get_document_frequency(tokens, word, top_words[j])
-        f_wi_wj = np.log(D_wi_wj + 1) - np.log(D_wi)
-        #if not D_wi or not D_wj or not D_wi_wj:
-          #print(word, top_words[j], D_wi, D_wj, D_wi_wj)
-        #if not D_wi_wj:
-        #  f_wi_wj = -1
-        #else:
-        #  f_wi_wj = -1 + ((np.log(D_wi_wj) - np.log(D)) - (np.log(D_wi) + np.log(D_wj) - 2.0 * np.log(D))) / (-np.log(D_wi_wj) + np.log(D))
-
-        tmp += f_wi_wj
-        j += 1
-        counter += 1
-            
-      coherence_k += tmp 
-
-    coherence.append(coherence_k)
-    
-  return np.mean(coherence) / counter
-"""
-def evaluate(model, training_data, dataset, dataset_count, data_batches, valid_loss, valid_loss_summary, session, step, epoch=None, summaries=None, writer=None):
+def evaluate(model, training_data, session, step, train_loss=None, epoch=None, summaries=None, writer=None):
 
   loss_sum = 0.0
   kld_sum = 0.0
   ppx_sum = 0.0
   word_count = 0
   doc_count = 0
+
+  data_url = os.path.join(FLAGS.data_dir, 'valid.feat' if step != 'test' else 'test.feat')
+  dataset, dataset_count = utils.data_set(data_url)
+  data_batches = utils.create_batches(len(dataset), FLAGS.batch_size, shuffle=False)
 
   for idx_batch in data_batches:
 
@@ -206,16 +137,33 @@ def evaluate(model, training_data, dataset, dataset_count, data_batches, valid_l
   diversity = get_topic_diversity(probabilities.eval(session), 'nvdm')
     
   if step == 'val':
-    
-    writer.add_summary(session.run(valid_loss_summary, feed_dict={valid_loss: loss_sum + kld_sum}), epoch)
-     
-    weight_summaries = session.run(summaries)
+
+    tloss = tf.get_default_graph().get_tensor_by_name('tloss:0') 
+    vloss = tf.get_default_graph().get_tensor_by_name('vloss:0') 
+
+    weight_summaries = session.run(summaries, feed_dict={tloss: train_loss, vloss: loss_sum + kld_sum})
     writer.add_summary(weight_summaries, epoch)
 
     saver = tf.train.Saver()
     save_path = saver.save(session, FLAGS.save_path + "/model.ckpt")
     print("Model saved in path: %s" % save_path)
     print('| Epoch dev: {:d} |'.format(epoch+1)) 
+
+  else:
+ 
+    with open(FLAGS.data_dir + '/vocab.new', 'rb') as f:
+      vocab = pkl.load(f)
+
+    topic_indices = list(np.random.choice(FLAGS.n_topic, 10)) # 10 random topics
+    print('\n')
+
+    with open(FLAGS.save_path + '/topics.txt', 'w') as f:
+      for k in range(FLAGS.n_topic):
+        gamma = probabilities.eval(session)[k]
+        top_words = list(gamma.argsort()[-FLAGS.n_words+1:][::-1])
+        topic_words = [vocab[a] for a in top_words]
+        f.write('Topic {}: {}\n'.format(k, topic_words))
+        print('Topic {}: {}'.format(k, topic_words))
 
   print('| Perplexity: {:.9f}'.format(print_ppx),
         '| Per doc ppx: {:.5f}'.format(print_ppx_perdoc),
@@ -229,18 +177,19 @@ def get_summaries(sess):
   weights = tf.trainable_variables()
   values = sess.run(weights)
 
-  weight_summaries = []
+  summaries = []
   for weight, value in zip(weights, values):
-    weight_summaries.append(tf.summary.histogram(weight.name, value))
+    summaries.append(tf.summary.histogram(weight.name, value))
 
-  return tf.summary.merge(weight_summaries) 
+  tloss = tf.placeholder(tf.float64, shape=(), name='tloss')
+  summaries.append(tf.summary.scalar('Training_loss', tloss))
 
-def train(sess, model, 
-          train_url, 
-          test_url, 
-          batch_size, 
-          training_epochs=10, 
-          alternate_epochs=10):
+  vloss = tf.placeholder(tf.float64, shape=(), name='vloss')
+  summaries.append(tf.summary.scalar('Validation_loss', vloss))
+
+  return tf.summary.merge(summaries) 
+
+def train(sess, model, train_url, test_url, batch_size, training_epochs=10, alternate_epochs=10):
 
   """train nvdm model."""
   train_set, train_count = utils.data_set(train_url)
@@ -253,11 +202,6 @@ def train(sess, model,
   test_batches = utils.create_batches(len(test_set), batch_size, shuffle=False)
   
   summaries = get_summaries(sess) 
-  train_loss = tf.placeholder(tf.float64, shape=(), name="Training_loss")
-  train_loss_summary = tf.summary.scalar('Training_loss', train_loss)
-
-  valid_loss = tf.placeholder(tf.float64, shape=(), name="Validation_loss")
-  valid_loss_summary = tf.summary.scalar('Validation_loss', valid_loss)
 
   writer = tf.summary.FileWriter(FLAGS.save_path + '/logs/', sess.graph)
   
@@ -306,9 +250,7 @@ def train(sess, model,
                '| Per doc ppx: {:.5f}'.format(print_ppx_perdoc),  # perplexity for per doc
                '| KLD: {:.5}'.format(print_kld))
 
-    writer.add_summary(sess.run(train_loss_summary, feed_dict={train_loss: loss_sum + kld_sum}), epoch)
-
-    evaluate(model, train_set, dev_set, dev_count, dev_batches, valid_loss, valid_loss_summary, sess, 'val', epoch, summaries, writer)
+    evaluate(model, train_set, sess, 'val', (loss_sum + kld_sum), epoch, summaries, writer)
 
 def main(argv=None):
 
@@ -342,8 +284,6 @@ def main(argv=None):
     
     else:
       #Test
-      test_set, test_count = utils.data_set(test_url)
-      test_batches = utils.create_batches(len(test_set), FLAGS.batch_size, shuffle=False)
 
       saver = tf.train.Saver()
       saver.restore(sess, FLAGS.save_path + "/model.ckpt")
@@ -351,7 +291,7 @@ def main(argv=None):
       
       #Training data
       train_set, train_count = utils.data_set(train_url)
-      evaluate(nvdm, train_set, test_set, test_count, test_batches, sess, 'test') 
+      evaluate(nvdm, train_set, sess, 'test') 
 
 if __name__ == '__main__':
     tf.app.run()
