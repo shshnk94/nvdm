@@ -13,7 +13,7 @@ from sklearn.metrics import pairwise_distances
 
 from os import path
 sys.path.append(path.dirname(path.dirname(path.abspath(__file__))))
-from metrics import get_topic_coherence, get_topic_diversity
+from metrics import get_topic_coherence, get_topic_diversity, get_perplexity
 
 np.random.seed(0)
 tf.set_random_seed(0)
@@ -56,7 +56,8 @@ class NVDM(object):
         self.mask = tf.placeholder(tf.float32, [None], name='mask')  # mask paddings
 
         # encoder
-        with tf.variable_scope('encoder'): 
+        with tf.variable_scope('encoder'):
+
           self.enc_vec = utils.mlp(self.x, [self.n_hidden], self.non_linearity)
           self.mean = utils.linear(self.enc_vec, self.n_topic, scope='mean')
           self.logsigm = utils.linear(self.enc_vec, 
@@ -64,26 +65,38 @@ class NVDM(object):
                                      bias_start_zero=True,
                                      matrix_start_zero=True,
                                      scope='logsigm')
+
           self.kld = -0.5 * tf.reduce_sum(1 - tf.square(self.mean) + 2 * self.logsigm - tf.exp(2 * self.logsigm), 1)
           self.kld = self.mask*self.kld  # mask paddings
         
         with tf.variable_scope('decoder'):
+
           if self.n_sample ==1:  # single sample
+
             eps = tf.random_normal((batch_size, self.n_topic), 0, 1)
-            doc_vec = tf.multiply(tf.exp(self.logsigm), eps) + self.mean
-            logits = tf.nn.log_softmax(utils.linear(doc_vec, self.vocab_size, scope='projection'))
+            self.doc_vec = tf.multiply(tf.exp(self.logsigm), eps) + self.mean
+            logits = tf.nn.log_softmax(utils.linear(self.doc_vec, self.vocab_size, scope='projection'))
             self.recons_loss = -tf.reduce_sum(tf.multiply(logits, self.x), 1)
+
           # multiple samples
           else:
+
             eps = tf.random_normal((self.n_sample*batch_size, self.n_topic), 0, 1)
             eps_list = tf.split(0, self.n_sample, eps)
+
             recons_loss_list = []
+            doc_vec_list = []
+
             for i in range(self.n_sample):
               if i > 0: tf.get_variable_scope().reuse_variables()
+
               curr_eps = eps_list[i]
               doc_vec = tf.multiply(tf.exp(self.logsigm), curr_eps) + self.mean
               logits = tf.nn.log_softmax(utils.linear(doc_vec, self.vocab_size, scope='projection'))
               recons_loss_list.append(-tf.reduce_sum(tf.multiply(logits, self.x), 1))
+              doc_vec_list.append(doc_vec)
+            
+            self.doc_vec = tf.stack(doc_vec_list, axis=0)
             self.recons_loss = tf.add_n(recons_loss_list) / self.n_sample
 
         self.objective = self.recons_loss + self.kld
@@ -102,46 +115,41 @@ class NVDM(object):
 
 def evaluate(model, training_data, session, step, train_loss=None, epoch=None, summaries=None, writer=None):
 
-  loss_sum = 0.0
-  kld_sum = 0.0
-  ppx_sum = 0.0
-  word_count = 0
-  doc_count = 0
+  #Get theta for the H1.
+  data_url = os.path.join(FLAGS.data_dir, 'valid_h1.feat' if step != 'test' else 'test_h1.feat')
+  dataset, dataset_count = utils.data_set(data_url)
+  data_batches = utils.create_batches(len(dataset), FLAGS.batch_size, shuffle=False)
+   
+  theta = []
+  for idx_batch in data_batches:
 
-  data_url = os.path.join(FLAGS.data_dir, 'valid.feat' if step != 'test' else 'test.feat')
+    data_batch, count_batch, mask = utils.fetch_data(dataset, dataset_count, idx_batch, FLAGS.vocab_size)
+    input_feed = {model.x.name: data_batch, model.mask.name: mask}
+
+    logit_theta = session.run(model.doc_vec, input_feed)
+    theta.append(softmax(logit_theta, axis=1)) 
+
+  theta = np.concatenate(theta, axis=0)
+  beta = softmax(tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope='decoder/projection/Matrix:0')[0].eval(session), axis=1)
+
+  #H2 to calculate perplexity.
+  data_url = os.path.join(FLAGS.data_dir, 'valid_h2.feat' if step != 'test' else 'test_h2.feat')
   dataset, dataset_count = utils.data_set(data_url)
   data_batches = utils.create_batches(len(dataset), FLAGS.batch_size, shuffle=False)
 
-  for idx_batch in data_batches:
+  test_data = [utils.fetch_data(dataset, dataset_count, idx_batch, FLAGS.vocab_size)[0] for idx_batch in data_batches]
+  test_data = np.concatenate(test_data, axis=0)
 
-    data_batch, count_batch, mask = utils.fetch_data(dataset, 
-                                                     dataset_count, 
-                                                     idx_batch, 
-                                                     FLAGS.vocab_size)
-    input_feed = {model.x.name: data_batch, model.mask.name: mask}
-    loss, kld = session.run([model.objective, model.kld], input_feed)
-    
-    loss_sum += np.sum(loss)
-    kld_sum += np.sum(kld) / np.sum(mask)  
-    word_count += np.sum(count_batch)
-    count_batch = np.add(count_batch, 1e-12)
-    ppx_sum += np.sum(np.divide(loss, count_batch))
-    doc_count += np.sum(mask) 
-
-  print_ppx = np.exp(loss_sum / word_count)
-  print_ppx_perdoc = np.exp(ppx_sum / doc_count)
-  print_kld = kld_sum/len(data_batches)
-
-  probabilities = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope='decoder/projection/Matrix:0')[0]
-  coherence = get_topic_coherence(probabilities.eval(session), training_data, 'nvdm')
-  diversity = get_topic_diversity(probabilities.eval(session), 'nvdm')
+  perplexity = get_perplexity(test_data, theta, beta)
+  coherence = get_topic_coherence(beta, training_data, 'nvdm')
+  diversity = get_topic_diversity(beta, 'nvdm')
     
   if step == 'val':
 
     tloss = tf.get_default_graph().get_tensor_by_name('tloss:0') 
-    vloss = tf.get_default_graph().get_tensor_by_name('vloss:0') 
+    vppl = tf.get_default_graph().get_tensor_by_name('vppl:0') 
 
-    weight_summaries = session.run(summaries, feed_dict={tloss: train_loss, vloss: loss_sum + kld_sum})
+    weight_summaries = session.run(summaries, feed_dict={tloss: train_loss, vppl: perplexity})
     writer.add_summary(weight_summaries, epoch)
 
     saver = tf.train.Saver()
@@ -159,18 +167,14 @@ def evaluate(model, training_data, session, step, train_loss=None, epoch=None, s
 
     with open(FLAGS.save_path + '/topics.txt', 'w') as f:
       for k in range(FLAGS.n_topic):
-        gamma = probabilities.eval(session)[k]
+        gamma = beta.eval(session)[k]
         top_words = list(gamma.argsort()[-FLAGS.n_words+1:][::-1])
         topic_words = [vocab[a] for a in top_words]
         f.write('Topic {}: {}\n'.format(k, topic_words))
         print('Topic {}: {}'.format(k, topic_words))
 
-  print('| Perplexity: {:.9f}'.format(print_ppx),
-        '| Per doc ppx: {:.5f}'.format(print_ppx_perdoc),
-        '| KLD: {:.5}'.format(print_kld))
-
   with open(FLAGS.save_path + '/report.csv', 'a') as handle:
-    handle.write(str(print_ppx_perdoc) + ',' + str(coherence) + ',' + str(diversity) + '\n')
+    handle.write(str(perplexity) + ',' + str(coherence) + ',' + str(diversity) + '\n')
 
 def get_summaries(sess):
 
@@ -184,25 +188,15 @@ def get_summaries(sess):
   tloss = tf.placeholder(tf.float64, shape=(), name='tloss')
   summaries.append(tf.summary.scalar('Training_loss', tloss))
 
-  vloss = tf.placeholder(tf.float64, shape=(), name='vloss')
-  summaries.append(tf.summary.scalar('Validation_loss', vloss))
+  vppl = tf.placeholder(tf.float64, shape=(), name='vppl')
+  summaries.append(tf.summary.scalar('Validation_ppl', vppl))
 
   return tf.summary.merge(summaries) 
 
-def train(sess, model, train_url, test_url, batch_size, training_epochs=10, alternate_epochs=10):
+def train(sess, model, train_url, batch_size, training_epochs=10, alternate_epochs=10):
 
-  """train nvdm model."""
   train_set, train_count = utils.data_set(train_url)
-  test_set, test_count = utils.data_set(test_url)
-  # hold-out development dataset
-  dev_set = test_set[:50]
-  dev_count = test_count[:50]
-
-  dev_batches = utils.create_batches(len(dev_set), batch_size, shuffle=False)
-  test_batches = utils.create_batches(len(test_set), batch_size, shuffle=False)
-  
   summaries = get_summaries(sess) 
-
   writer = tf.summary.FileWriter(FLAGS.save_path + '/logs/', sess.graph)
   
   for epoch in range(training_epochs):
@@ -275,12 +269,11 @@ def main(argv=None):
     sess.run(init)
 
     train_url = os.path.join(FLAGS.data_dir, 'train.feat')
-    test_url = os.path.join(FLAGS.data_dir, 'test.feat')
     
     if not FLAGS.test:
      # if not os.path.exists(FLAGS.save_path):
      #   os.makedirs(FLAGS.save_path)
-      train(sess, nvdm, train_url, test_url, FLAGS.batch_size, FLAGS.epochs)
+      train(sess, nvdm, train_url, FLAGS.batch_size, FLAGS.epochs)
     
     else:
       #Test

@@ -1,3 +1,5 @@
+# -*- coding: utf-8 -*-
+
 from sklearn.feature_extraction.text import CountVectorizer
 from sklearn.datasets import fetch_20newsgroups
 import numpy as np
@@ -16,7 +18,7 @@ valid_split_percent = float(sys.argv[2])
 
 # Maximum / minimum document frequency
 max_df = 0.7
-min_df = 10  # choose desired value for min_df
+min_df = 100  # choose desired value for min_df
 
 # Read stopwords
 with open('stops.txt', 'r') as f:
@@ -35,12 +37,17 @@ def contains_punctuation(w):
 
 def contains_numeric(w):
     return any(char.isdigit() for char in w)
-    
-init_docs = init_docs_tr + init_docs_ts
 
 # Remove documents with length less than 10 and greater than 95th percentile.
-lengths = np.array([len(doc) for doc in init_docs])
-init_docs = [init_docs[i] for i in np.where((lengths > 10) & (lengths < np.percentile(lengths, 95)))[0]]
+def remove_outlier(docs):
+    lengths = np.array([len(doc) for doc in docs])
+    docs = [docs[i] for i in np.where((lengths > 10) & (lengths < np.percentile(lengths, 95)))[0]]
+
+    return docs
+
+#init_docs_tr = remove_outlier(init_docs_tr)
+#init_docs_ts = remove_outlier(init_docs_ts) 
+init_docs = init_docs_tr + init_docs_ts
 
 # Removes all words with any punctuation or digits in them.
 init_docs = [[w.lower() for w in init_docs[doc] if not contains_punctuation(w)] for doc in range(len(init_docs))]
@@ -67,9 +74,10 @@ del cvectorizer
 # Split in train/test/valid
 print('tokenizing documents and splitting into train/test/valid...')
 num_docs_tr = len(init_docs_tr)
-vaSize = 50#int(valid_split_percent * num_docs_tr)
-trSize = 200#num_docs_tr - vaSize
-tsSize = 50#len(init_docs_ts)
+vaSize = 100#int(valid_split_percent * num_docs_tr)
+trSize = num_docs_tr - vaSize
+tsSize = len(init_docs_ts)
+
 #idx_permute = np.random.permutation(num_docs_tr).astype(int)
 idx_permute = np.arange(num_docs_tr)
 
@@ -83,6 +91,7 @@ print('vocabulary after removing words not in train: {}'.format(len(vocab)))
 docs_tr = [[word2id[w] for w in init_docs[idx_permute[idx_d]].split() if w in word2id] for idx_d in range(trSize)]
 docs_va = [[word2id[w] for w in init_docs[idx_permute[idx_d+trSize]].split() if w in word2id] for idx_d in range(vaSize)]
 docs_ts = [[word2id[w] for w in init_docs[idx_d+num_docs_tr].split() if w in word2id] for idx_d in range(tsSize)]
+
 print('number of documents (train): {} [this should be equal to {}]'.format(len(docs_tr), trSize))
 print('number of documents (test): {} [this should be equal to {}]'.format(len(docs_ts), tsSize))
 print('number of documents (valid): {} [this should be equal to {}]'.format(len(docs_va), vaSize))
@@ -100,6 +109,13 @@ docs_va = remove_empty(docs_va)
 # Remove test documents with length=1
 docs_ts = [doc for doc in docs_ts if len(doc)>1]
 
+# Split test set in 2 halves
+print('splitting test and validation documents in 2 halves...')
+docs_ts_h1 = [[w for i,w in enumerate(doc) if i<=len(doc)/2.0-1] for doc in docs_ts]
+docs_ts_h2 = [[w for i,w in enumerate(doc) if i>len(doc)/2.0-1] for doc in docs_ts]
+docs_va_h1 = [[w for i,w in enumerate(doc) if i<=len(doc)/2.0-1] for doc in docs_va]
+docs_va_h2 = [[w for i,w in enumerate(doc) if i>len(doc)/2.0-1] for doc in docs_va]
+
 # Get doc indices
 print('getting doc indices...')
 
@@ -108,17 +124,23 @@ def create_doc_indices(in_docs):
     return [int(x) for y in aux for x in y]
 
 doc_indices_tr = create_doc_indices(docs_tr)
-doc_indices_ts = create_doc_indices(docs_ts)
-doc_indices_va = create_doc_indices(docs_va)
+doc_indices_ts_h1 = create_doc_indices(docs_ts_h1)
+doc_indices_ts_h2 = create_doc_indices(docs_ts_h2)
+doc_indices_va_h1 = create_doc_indices(docs_va_h1)
+doc_indices_va_h2 = create_doc_indices(docs_va_h2)
 
 print('len(np.unique(doc_indices_tr)): {} [this should be {}]'.format(len(np.unique(doc_indices_tr)), len(docs_tr)))
-print('len(np.unique(doc_indices_ts)): {} [this should be {}]'.format(len(np.unique(doc_indices_ts)), len(docs_ts)))
-print('len(np.unique(doc_indices_va)): {} [this should be {}]'.format(len(np.unique(doc_indices_va)), len(docs_va)))
+print('len(np.unique(doc_indices_ts_h1)): {} [this should be {}]'.format(len(np.unique(doc_indices_ts_h1)), len(docs_ts_h1)))
+print('len(np.unique(doc_indices_ts_h2)): {} [this should be {}]'.format(len(np.unique(doc_indices_ts_h2)), len(docs_ts_h2)))
+print('len(np.unique(doc_indices_va_h1)): {} [this should be {}]'.format(len(np.unique(doc_indices_va_h1)), len(docs_va_h1)))
+print('len(np.unique(doc_indices_va_h2)): {} [this should be {}]'.format(len(np.unique(doc_indices_va_h2)), len(docs_va_h2)))
 
 # Number of documents in each set
 n_docs_tr = len(docs_tr)
-n_docs_ts = len(docs_ts)
-n_docs_va = len(docs_va)
+n_docs_ts_h1 = len(docs_ts_h1)
+n_docs_ts_h2 = len(docs_ts_h2)
+n_docs_va_h1 = len(docs_va_h1)
+n_docs_va_h2 = len(docs_va_h2)
 
 # Create bow representation
 print('creating bow representation...')
@@ -130,29 +152,37 @@ def create_bow(doc_indices, words, n_docs, vocab_size):
     return sparse.coo_matrix(([1]*len(doc_indices),(doc_indices, words)), shape=(n_docs, vocab_size)).tocsr()
 
 bow_tr = create_bow(doc_indices_tr, create_list_words(docs_tr), n_docs_tr, len(vocab))
-bow_ts = create_bow(doc_indices_ts, create_list_words(docs_ts), n_docs_ts, len(vocab))
-bow_va = create_bow(doc_indices_va, create_list_words(docs_va), n_docs_va, len(vocab))
+bow_ts_h1 = create_bow(doc_indices_ts_h1, create_list_words(docs_ts_h1), n_docs_ts_h1, len(vocab))
+bow_ts_h2 = create_bow(doc_indices_ts_h2, create_list_words(docs_ts_h2), n_docs_ts_h2, len(vocab))
+bow_va_h1 = create_bow(doc_indices_va_h1, create_list_words(docs_va_h1), n_docs_va_h1, len(vocab))
+bow_va_h2 = create_bow(doc_indices_va_h2, create_list_words(docs_va_h2), n_docs_va_h2, len(vocab))
 
 # Remove unused variables
 del docs_tr
-del docs_ts
-del docs_va
+del docs_ts_h1
+del docs_ts_h2
+del docs_va_h1
+del docs_va_h2
 del doc_indices_tr
-del doc_indices_ts
-del doc_indices_va
+del doc_indices_ts_h1
+del doc_indices_ts_h2
+del doc_indices_va_h1
+del doc_indices_va_h2
 
 # Save vocabulary to file
-with open('vocab.new', 'wb') as f:
+with open(path_save + '/vocab.new', 'wb') as f:
     pickle.dump(vocab, f)
 del vocab
 
 def split(matrix, name):
-    with open(name + '.feat', 'w') as f:
+    with open(path_save + '/' + name + '.feat', 'w') as f:
         for index, doc in enumerate(matrix):
             f.write(' '.join([str(index)] + [str(word) + ':' + str(doc[word]) for word in list(doc.nonzero()[0])]) + '\n')
 
 split(bow_tr.toarray(), 'train')
-split(bow_ts.toarray(), 'test')
-split(bow_va.toarray(), 'valid')
+split(bow_ts_h1.toarray(), 'test_h1')
+split(bow_ts_h2.toarray(), 'test_h2')
+split(bow_va_h1.toarray(), 'valid_h1')
+split(bow_va_h2.toarray(), 'valid_h2')
 
 print('Data ready !!')

@@ -43,6 +43,7 @@ def create_batches(data_size, batch_size, shuffle=True):
   return batches
 
 def fetch_data(data, count, idx_batch, vocab_size):
+
   """fetch input data by batch."""
   batch_size = len(idx_batch)
   data_batch = np.zeros((batch_size, vocab_size))
