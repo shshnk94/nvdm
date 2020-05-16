@@ -165,12 +165,12 @@ def evaluate(model, training_data, session, step, train_loss=None, epoch=None, s
     topic_indices = list(np.random.choice(FLAGS.n_topic, 10)) # 10 random topics
     print('\n')
 
-    with open(FLAGS.save_path + '/topics.txt', 'w') as f:
+    with open(FLAGS.save_path + '/topics_' + str(FLAGS.n_topic) + '.txt', 'w') as f:
       for k in range(FLAGS.n_topic):
-        gamma = beta.eval(session)[k]
+        gamma = beta[k]
         top_words = list(gamma.argsort()[-FLAGS.n_words+1:][::-1])
         topic_words = [vocab[a] for a in top_words]
-        f.write('Topic {}: {}\n'.format(k, topic_words))
+        f.write(str(k) + ' ' + str(topic_words) + '\n')
         print('Topic {}: {}'.format(k, topic_words))
 
   with open(FLAGS.save_path + '/report.csv', 'a') as handle:
