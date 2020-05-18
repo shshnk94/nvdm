@@ -113,7 +113,7 @@ class NVDM(object):
         self.optim_enc = optimizer.apply_gradients(zip(enc_grads, enc_vars))
         self.optim_dec = optimizer.apply_gradients(zip(dec_grads, dec_vars))
 
-def evaluate(model, training_data, session, step, train_loss=None, epoch=None, summaries=None, writer=None):
+def evaluate(model, training_data, training_count, session, step, train_loss=None, epoch=None, summaries=None, writer=None):
 
   #Get theta for the H1.
   data_url = os.path.join(FLAGS.data_dir, 'valid_h1.feat' if step != 'test' else 'test_h1.feat')
@@ -158,7 +158,27 @@ def evaluate(model, training_data, session, step, train_loss=None, epoch=None, s
     print('| Epoch dev: {:d} |'.format(epoch+1)) 
 
   else:
- 
+    
+    ## get most used topics
+    cnt = 0
+    thetaAvg = np.zeros((1, FLAGS.n_topic))
+    thetaWeightedAvg = np.zeros((1, FLAGS.n_topic))
+    data_batches = utils.create_batches(len(training_data), FLAGS.batch_size, shuffle=False)
+
+    for idx_batch in data_batches:
+
+        batch, count_batch, mask = utils.fetch_data(training_data, training_count, idx_batch, FLAGS.vocab_size)
+        sums = batch.sum(axis=1)
+        cnt += sums.sum(axis=0)
+        logit_theta = session.run(model.doc_vec, input_feed)
+        theta = softmax(logit_theta, axis=1)
+        thetaAvg += theta.sum(axis=0) / len(training_data)
+        weighed_theta = (theta.T * sums).T
+        thetaWeightedAvg += weighed_theta.sum(axis=0)
+
+    thetaWeightedAvg = thetaWeightedAvg.squeeze() / cnt
+    print('\nThe 10 most used topics are {}'.format(thetaWeightedAvg.argsort()[::-1][:10]))
+
     with open(FLAGS.data_dir + '/vocab.new', 'rb') as f:
       vocab = pkl.load(f)
 
@@ -244,7 +264,7 @@ def train(sess, model, train_url, batch_size, training_epochs=10, alternate_epoc
                '| Per doc ppx: {:.5f}'.format(print_ppx_perdoc),  # perplexity for per doc
                '| KLD: {:.5}'.format(print_kld))
 
-    evaluate(model, train_set, sess, 'val', (loss_sum + kld_sum), epoch, summaries, writer)
+    evaluate(model, train_set, train_count, sess, 'val', (loss_sum + kld_sum), epoch, summaries, writer)
 
 def main(argv=None):
 
@@ -284,7 +304,7 @@ def main(argv=None):
       
       #Training data
       train_set, train_count = utils.data_set(train_url)
-      evaluate(nvdm, train_set, sess, 'test') 
+      evaluate(nvdm, train_set, train_count, sess, 'test') 
 
 if __name__ == '__main__':
     tf.app.run()

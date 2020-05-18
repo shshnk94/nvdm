@@ -45,8 +45,8 @@ def remove_outlier(docs):
 
     return docs
 
-#init_docs_tr = remove_outlier(init_docs_tr)
-#init_docs_ts = remove_outlier(init_docs_ts) 
+init_docs_tr = remove_outlier(init_docs_tr)
+init_docs_ts = remove_outlier(init_docs_ts) 
 init_docs = init_docs_tr + init_docs_ts
 
 # Removes all words with any punctuation or digits in them.
@@ -74,7 +74,7 @@ del cvectorizer
 # Split in train/test/valid
 print('tokenizing documents and splitting into train/test/valid...')
 num_docs_tr = len(init_docs_tr)
-vaSize = 100#int(valid_split_percent * num_docs_tr)
+vaSize = int(valid_split_percent * num_docs_tr)
 trSize = num_docs_tr - vaSize
 tsSize = len(init_docs_ts)
 
