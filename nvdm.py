@@ -161,7 +161,6 @@ def evaluate(model, training_data, training_count, session, step, train_loss=Non
     
     ## get most used topics
     cnt = 0
-    thetaAvg = np.zeros((1, FLAGS.n_topic))
     thetaWeightedAvg = np.zeros((1, FLAGS.n_topic))
     data_batches = utils.create_batches(len(training_data), FLAGS.batch_size, shuffle=False)
 
@@ -170,9 +169,10 @@ def evaluate(model, training_data, training_count, session, step, train_loss=Non
         batch, count_batch, mask = utils.fetch_data(training_data, training_count, idx_batch, FLAGS.vocab_size)
         sums = batch.sum(axis=1)
         cnt += sums.sum(axis=0)
+
+        input_feed = {model.x.name: batch, model.mask.name: mask}
         logit_theta = session.run(model.doc_vec, input_feed)
         theta = softmax(logit_theta, axis=1)
-        thetaAvg += theta.sum(axis=0) / len(training_data)
         weighed_theta = (theta.T * sums).T
         thetaWeightedAvg += weighed_theta.sum(axis=0)
 
