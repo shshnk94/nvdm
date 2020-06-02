@@ -7,6 +7,7 @@ import pickle as pkl
 import math
 import os
 import sys
+import time
 import utils as utils
 from scipy.special import softmax
 from sklearn.metrics import pairwise_distances
@@ -14,6 +15,8 @@ from sklearn.metrics import pairwise_distances
 from os import path
 sys.path.append(path.dirname(path.dirname(path.abspath(__file__))))
 from metrics import get_topic_coherence, get_topic_diversity, get_perplexity
+import psutil
+import gc
 
 np.random.seed(0)
 tf.set_random_seed(0)
@@ -31,11 +34,23 @@ flags.DEFINE_integer('vocab_size', 2000, 'Vocabulary size.')
 flags.DEFINE_boolean('test', False, 'Process test data.')
 flags.DEFINE_string('non_linearity', 'tanh', 'Non-linearity of the MLP.')
 flags.DEFINE_integer('epochs', 25, 'Number of training epochs.')
+flags.DEFINE_string('fold', '', 'Cross validation fold number.')
+flags.DEFINE_string('load_from', '', 'Points to model checkpoint')
 FLAGS = flags.FLAGS
 
+if FLAGS.test:
+    ckpt = FLAGS.load_from
+else:
+    if FLAGS.fold != '':
+        FLAGS.data_dir = os.path.join(FLAGS.data_dir, 'fold{}'.format(FLAGS.fold))
+        ckpt = os.path.join(FLAGS.save_path, 'k{}_e{}_lr{}'.format(FLAGS.n_topic, FLAGS.epochs, FLAGS.learning_rate), 'fold{}'.format(FLAGS.fold))
+    else:
+        ckpt = FLAGS.save_path
+
+process = psutil.Process(os.getpid())
+
 class NVDM(object):
-    """ Neural Variational Document Model -- BOW VAE.
-    """
+
     def __init__(self, 
                  vocab_size,
                  n_hidden,
@@ -51,7 +66,7 @@ class NVDM(object):
         self.non_linearity = non_linearity
         self.learning_rate = learning_rate
         self.batch_size = batch_size
-
+        
         self.x = tf.placeholder(tf.float32, [None, vocab_size], name='input')
         self.mask = tf.placeholder(tf.float32, [None], name='mask')  # mask paddings
 
@@ -68,7 +83,7 @@ class NVDM(object):
 
           self.kld = -0.5 * tf.reduce_sum(1 - tf.square(self.mean) + 2 * self.logsigm - tf.exp(2 * self.logsigm), 1)
           self.kld = self.mask*self.kld  # mask paddings
-        
+
         with tf.variable_scope('decoder'):
 
           if self.n_sample ==1:  # single sample
@@ -100,7 +115,7 @@ class NVDM(object):
             self.recons_loss = tf.add_n(recons_loss_list) / self.n_sample
 
         self.objective = self.recons_loss + self.kld
-
+ 
         optimizer = tf.train.AdamOptimizer(learning_rate=self.learning_rate)
         fullvars = tf.trainable_variables()
 
@@ -141,8 +156,8 @@ def evaluate(model, training_data, training_count, session, step, train_loss=Non
   test_data = np.concatenate(test_data, axis=0)
 
   perplexity = get_perplexity(test_data, theta, beta)
-  coherence = get_topic_coherence(beta, training_data, 'nvdm')
-  diversity = get_topic_diversity(beta, 'nvdm')
+  coherence = get_topic_coherence(beta, training_data, 'nvdm') if  step == 'test' else np.nan
+  diversity = get_topic_diversity(beta, 'nvdm') if step == 'test' else np.nan
     
   if step == 'val':
 
@@ -153,8 +168,8 @@ def evaluate(model, training_data, training_count, session, step, train_loss=Non
     writer.add_summary(weight_summaries, epoch)
 
     saver = tf.train.Saver()
-    save_path = saver.save(session, FLAGS.save_path + "/model.ckpt")
-    print("Model saved in path: %s" % save_path)
+    save_path = saver.save(session, ckpt + "/model.ckpt")
+    print("Model saved in path: %s" % ckpt)
     print('| Epoch dev: {:d} |'.format(epoch+1)) 
 
   else:
@@ -185,7 +200,7 @@ def evaluate(model, training_data, training_count, session, step, train_loss=Non
     topic_indices = list(np.random.choice(FLAGS.n_topic, 10)) # 10 random topics
     print('\n')
 
-    with open(FLAGS.save_path + '/topics_' + str(FLAGS.n_topic) + '.txt', 'w') as f:
+    with open(ckpt + '/topics.txt', 'w') as f:
       for k in range(FLAGS.n_topic):
         gamma = beta[k]
         top_words = list(gamma.argsort()[-FLAGS.n_words+1:][::-1])
@@ -193,7 +208,7 @@ def evaluate(model, training_data, training_count, session, step, train_loss=Non
         f.write(str(k) + ' ' + str(topic_words) + '\n')
         print('Topic {}: {}'.format(k, topic_words))
 
-  with open(FLAGS.save_path + '/report.csv', 'a') as handle:
+  with open(ckpt + '/' + step + '_scores.csv', 'a') as handle:
     handle.write(str(perplexity) + ',' + str(coherence) + ',' + str(diversity) + '\n')
 
 def get_summaries(sess):
@@ -217,7 +232,7 @@ def train(sess, model, train_url, batch_size, training_epochs=10, alternate_epoc
 
   train_set, train_count = utils.data_set(train_url)
   summaries = get_summaries(sess) 
-  writer = tf.summary.FileWriter(FLAGS.save_path + '/logs/', sess.graph)
+  writer = tf.summary.FileWriter(ckpt + '/logs/', sess.graph)
   
   for epoch in range(training_epochs):
 
@@ -263,7 +278,7 @@ def train(sess, model, train_url, batch_size, training_epochs=10, alternate_epoc
                '| Corpus ppx: {:.5f}'.format(print_ppx),  # perplexity for all docs
                '| Per doc ppx: {:.5f}'.format(print_ppx_perdoc),  # perplexity for per doc
                '| KLD: {:.5}'.format(print_kld))
-
+        
     evaluate(model, train_set, train_count, sess, 'val', (loss_sum + kld_sum), epoch, summaries, writer)
 
 def main(argv=None):
@@ -274,6 +289,7 @@ def main(argv=None):
       non_linearity = tf.nn.sigmoid
     else:
       non_linearity = tf.nn.relu
+    
 
     nvdm = NVDM(vocab_size=FLAGS.vocab_size,
                 n_hidden=FLAGS.n_hidden,
@@ -282,10 +298,12 @@ def main(argv=None):
                 learning_rate=FLAGS.learning_rate, 
                 batch_size=FLAGS.batch_size,
                 non_linearity=non_linearity)
+    
+    config = tf.ConfigProto()
+    config.gpu_options.allow_growth=True
+    sess = tf.Session(config=config)
 
-    sess = tf.Session()
     init = tf.initialize_all_variables()
-
     sess.run(init)
 
     train_url = os.path.join(FLAGS.data_dir, 'train.feat')
@@ -299,7 +317,7 @@ def main(argv=None):
       #Test
 
       saver = tf.train.Saver()
-      saver.restore(sess, FLAGS.save_path + "/model.ckpt")
+      saver.restore(sess, ckpt + "/model.ckpt")
       print("Model restored.")
       
       #Training data
