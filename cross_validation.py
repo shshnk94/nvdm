@@ -26,7 +26,7 @@ def run_script(params, fold):
 
 #Hyperparameters
 hyperparameters = {'epochs': ['5000'],
-                   'lr': ['5e-3']}
+                   'lr': ['5e-6']}#'5e-3', '5e-4']}
 
 for params in ParameterGrid(hyperparameters):
     for fold in range(3): #Hard coded values of fold

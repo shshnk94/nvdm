@@ -15,8 +15,11 @@ from sklearn.metrics import pairwise_distances
 from os import path
 sys.path.append(path.dirname(path.dirname(path.abspath(__file__))))
 from metrics import get_topic_coherence, get_topic_diversity, get_perplexity
-import psutil
+
+
 import gc
+import psutil
+process = psutil.Process(os.getpid())
 
 np.random.seed(0)
 tf.set_random_seed(0)
@@ -128,7 +131,7 @@ class NVDM(object):
         self.optim_enc = optimizer.apply_gradients(zip(enc_grads, enc_vars))
         self.optim_dec = optimizer.apply_gradients(zip(dec_grads, dec_vars))
 
-def evaluate(model, training_data, training_count, session, step, train_loss=None, epoch=None, summaries=None, writer=None):
+def evaluate(model, training_data, training_count, session, step, train_loss=None, epoch=None, summaries=None, writer=None, saver=None):
 
   #Get theta for the H1.
   data_url = os.path.join(FLAGS.data_dir, 'valid_h1.feat' if step != 'test' else 'test_h1.feat')
@@ -161,14 +164,14 @@ def evaluate(model, training_data, training_count, session, step, train_loss=Non
     
   if step == 'val':
 
-    tloss = tf.get_default_graph().get_tensor_by_name('tloss:0') 
-    vppl = tf.get_default_graph().get_tensor_by_name('vppl:0') 
+    #tloss = tf.get_default_graph().get_tensor_by_name('tloss:0') 
+    #vppl = tf.get_default_graph().get_tensor_by_name('vppl:0') 
 
-    weight_summaries = session.run(summaries, feed_dict={tloss: train_loss, vppl: perplexity})
+    #weight_summaries = session.run(summaries, feed_dict={tloss: train_loss, vppl: perplexity})
+    weight_summaries = summaries.eval(session=session)
     writer.add_summary(weight_summaries, epoch)
-
-    saver = tf.train.Saver()
     save_path = saver.save(session, ckpt + "/model.ckpt")
+
     print("Model saved in path: %s" % ckpt)
     print('| Epoch dev: {:d} |'.format(epoch+1)) 
 
@@ -214,26 +217,33 @@ def evaluate(model, training_data, training_count, session, step, train_loss=Non
 def get_summaries(sess):
 
   weights = tf.trainable_variables()
-  values = sess.run(weights)
+  values = [sess.graph.get_tensor_by_name(w.name) for w in weights]
 
   summaries = []
   for weight, value in zip(weights, values):
     summaries.append(tf.summary.histogram(weight.name, value))
 
-  tloss = tf.placeholder(tf.float64, shape=(), name='tloss')
-  summaries.append(tf.summary.scalar('Training_loss', tloss))
+  #tloss = tf.placeholder(tf.float64, shape=(), name='tloss')
+  #summaries.append(tf.summary.scalar('Training_loss', tloss))
 
-  vppl = tf.placeholder(tf.float64, shape=(), name='vppl')
-  summaries.append(tf.summary.scalar('Validation_ppl', vppl))
+  #vppl = tf.placeholder(tf.float64, shape=(), name='vppl')
+  #summaries.append(tf.summary.scalar('Validation_ppl', vppl))
 
   return tf.summary.merge(summaries) 
 
-def train(sess, model, train_url, batch_size, training_epochs=10, alternate_epochs=10):
+def train(sess, model, train_url, batch_size, training_epochs=1000, alternate_epochs=10):
 
   train_set, train_count = utils.data_set(train_url)
+
   summaries = get_summaries(sess) 
+  saver = tf.train.Saver()
   writer = tf.summary.FileWriter(ckpt + '/logs/', sess.graph)
-  
+
+  sess.graph.finalize()
+ 
+  total_mem = 0
+  mem = 0
+ 
   for epoch in range(training_epochs):
 
     train_batches = utils.create_batches(len(train_set), batch_size, shuffle=True)
@@ -279,7 +289,13 @@ def train(sess, model, train_url, batch_size, training_epochs=10, alternate_epoc
                '| Per doc ppx: {:.5f}'.format(print_ppx_perdoc),  # perplexity for per doc
                '| KLD: {:.5}'.format(print_kld))
         
-    evaluate(model, train_set, train_count, sess, 'val', (loss_sum + kld_sum), epoch, summaries, writer)
+    evaluate(model, train_set, train_count, sess, 'val', (loss_sum + kld_sum), epoch, summaries, writer, saver)
+
+    current_mem = process.memory_info().rss / (1024 ** 2)
+    total_mem += (current_mem - mem)
+    print("Memory increase: {}, Cumulative memory: {}, and current {} in MB".format(current_mem - mem, total_mem, current_mem))
+    mem = current_mem
+    gc.collect()
 
 def main(argv=None):
 
@@ -309,8 +325,6 @@ def main(argv=None):
     train_url = os.path.join(FLAGS.data_dir, 'train.feat')
     
     if not FLAGS.test:
-     # if not os.path.exists(FLAGS.save_path):
-     #   os.makedirs(FLAGS.save_path)
       train(sess, nvdm, train_url, FLAGS.batch_size, FLAGS.epochs)
     
     else:

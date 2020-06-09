@@ -14,8 +14,8 @@ parser.add_argument('--save_path', type=str, help='save path for every run')
 args = parser.parse_args()
 
 #Hyperparameters
-hyperparameters = {'epochs': ['2'],
-                   'lr': ['5e-5', '5e-4']}
+hyperparameters = {'epochs': ['5000'],
+                   'lr': ['5e-7', '5e-6', '5e-5', '5e-4', '5e-3']}
 
 for params in ParameterGrid(hyperparameters):
 
