@@ -168,8 +168,8 @@ def evaluate(model, training_data, training_count, session, step, train_loss=Non
     #vppl = tf.get_default_graph().get_tensor_by_name('vppl:0') 
 
     #weight_summaries = session.run(summaries, feed_dict={tloss: train_loss, vppl: perplexity})
-    weight_summaries = summaries.eval(session=session)
-    writer.add_summary(weight_summaries, epoch)
+    #weight_summaries = summaries.eval(session=session)
+    #writer.add_summary(weight_summaries, epoch)
     save_path = saver.save(session, ckpt + "/model.ckpt")
 
     print("Model saved in path: %s" % ckpt)
@@ -235,9 +235,9 @@ def train(sess, model, train_url, batch_size, training_epochs=1000, alternate_ep
 
   train_set, train_count = utils.data_set(train_url)
 
-  summaries = get_summaries(sess) 
+  summaries = None#get_summaries(sess) 
+  writer = None#tf.summary.FileWriter(ckpt + '/logs/', sess.graph)
   saver = tf.train.Saver()
-  writer = tf.summary.FileWriter(ckpt + '/logs/', sess.graph)
 
   sess.graph.finalize()
  

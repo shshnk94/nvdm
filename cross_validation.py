@@ -18,15 +18,15 @@ def run_script(params, fold):
     os.system('CUDA_VISIBLE_DEVICES={} python nvdm/nvdm.py --data_dir '.format(args.gpu) + args.data_path +
                   ' --n_topic ' + args.topics +
                   ' --epochs ' + params['epochs'] +
-                  ' --batch_size 1000' +
+                  ' --batch_size 64' +
                   ' --vocab_size ' + args.vocab_size +
                   ' --fold ' + str(fold) +
                   ' --learning_rate ' + params['lr'] + 
                   ' --save_path ' + args.save_path + ' &')
 
 #Hyperparameters
-hyperparameters = {'epochs': ['5000'],
-                   'lr': ['5e-6']}#'5e-3', '5e-4']}
+hyperparameters = {'epochs': ['2000'],
+                   'lr': ['5e-5', '5e-3', '5e-4']}
 
 for params in ParameterGrid(hyperparameters):
     for fold in range(3): #Hard coded values of fold
