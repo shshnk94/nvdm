@@ -74,9 +74,9 @@ del cvectorizer
 # Split in train/test/valid
 print('tokenizing documents and splitting into train/test/valid...')
 num_docs_tr = len(init_docs_tr)
-vaSize = int(valid_split_percent * num_docs_tr)
-trSize = num_docs_tr - vaSize
-tsSize = len(init_docs_ts)
+vaSize = 200#int(valid_split_percent * num_docs_tr)
+trSize = 1000#num_docs_tr - vaSize
+tsSize = 200#len(init_docs_ts)
 
 #idx_permute = np.random.permutation(num_docs_tr).astype(int)
 idx_permute = np.arange(num_docs_tr)

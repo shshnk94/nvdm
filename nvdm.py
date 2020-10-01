@@ -38,17 +38,17 @@ flags.DEFINE_boolean('test', False, 'Process test data.')
 flags.DEFINE_string('non_linearity', 'tanh', 'Non-linearity of the MLP.')
 flags.DEFINE_integer('epochs', 25, 'Number of training epochs.')
 flags.DEFINE_string('fold', '', 'Cross validation fold number.')
-flags.DEFINE_string('load_from', '', 'Points to model checkpoint')
+
 FLAGS = flags.FLAGS
 
-if FLAGS.test:
-    ckpt = FLAGS.load_from
+if FLAGS.fold != '':
+    FLAGS.data_dir = os.path.join(FLAGS.data_dir, 'fold{}'.format(FLAGS.fold))
+    ckpt = os.path.join(FLAGS.save_path, 'k{}_e{}_lr{}'.format(FLAGS.n_topic, FLAGS.epochs, FLAGS.learning_rate), 'fold{}'.format(FLAGS.fold))
 else:
-    if FLAGS.fold != '':
-        FLAGS.data_dir = os.path.join(FLAGS.data_dir, 'fold{}'.format(FLAGS.fold))
-        ckpt = os.path.join(FLAGS.save_path, 'k{}_e{}_lr{}'.format(FLAGS.n_topic, FLAGS.epochs, FLAGS.learning_rate), 'fold{}'.format(FLAGS.fold))
-    else:
-        ckpt = FLAGS.save_path
+    ckpt = FLAGS.save_path
+
+if not os.path.exists(ckpt):
+    os.makedirs(ckpt)
 
 process = psutil.Process(os.getpid())
 
@@ -148,7 +148,10 @@ def evaluate(model, training_data, training_count, session, step, train_loss=Non
     theta.append(softmax(logit_theta, axis=1)) 
 
   theta = np.concatenate(theta, axis=0)
-  beta = softmax(tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope='decoder/projection/Matrix:0')[0].eval(session), axis=1)
+
+  weights = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope='decoder/projection/Matrix:0')[0].eval(session)
+  bias = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope='decoder/projection/Bias:0')[0].eval(session)
+  beta = softmax(weights + bias, axis=1)
 
   #H2 to calculate perplexity.
   data_url = os.path.join(FLAGS.data_dir, 'valid_h2.feat' if step != 'test' else 'test_h2.feat')
@@ -170,7 +173,7 @@ def evaluate(model, training_data, training_count, session, step, train_loss=Non
     #weight_summaries = session.run(summaries, feed_dict={tloss: train_loss, vppl: perplexity})
     #weight_summaries = summaries.eval(session=session)
     #writer.add_summary(weight_summaries, epoch)
-    save_path = saver.save(session, ckpt + "/model.ckpt")
+    save_path = saver.save(session, os.path.join(ckpt, 'model.ckpt'))
 
     print("Model saved in path: %s" % ckpt)
     print('| Epoch dev: {:d} |'.format(epoch+1)) 
@@ -331,7 +334,7 @@ def main(argv=None):
       #Test
 
       saver = tf.train.Saver()
-      saver.restore(sess, ckpt + "/model.ckpt")
+      saver.restore(sess, os.path.join(ckpt, 'model.ckpt'))
       print("Model restored.")
       
       #Training data
